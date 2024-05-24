@@ -1,0 +1,69 @@
+import socket
+import struct
+import binascii
+import subprocess
+
+# Creating a socket
+try:
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0800))
+except socket.error as err:
+    print(f"Socket could not be created. Error Code: {err}")
+    exit()
+
+# Convert MAC addresses to IP addresses
+def get_mac_to_ip():
+    mac_to_ip = {}
+
+    try:
+
+        # Creating a temporary UDP Socket
+        temp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        temp_socket.connect(("8.8.8.8", 80)) # Connects to a known IP address in the network
+        local_ip_address = temp_socket.getsockname()[0]
+        temp_socket.close()
+
+        # Runs the `arp -a` command to convert the MAC address to an IP
+        result = subprocess.run(['arp', '-a'], capture_output=True, text=True)
+        arp_output = result.stdout
+
+        for line in arp_output.splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                ip_address = parts[0]
+                mac_address = parts[2].lower()
+                if ip_address != local_ip_address:
+                    mac_to_ip[mac_address] = ip_address
+        
+    except Exception as e:
+        print(f"Failed to read ARP table: {e}")
+        return None
+    
+    return mac_to_ip
+
+def main():
+    mac_to_ip = get_mac_to_ip()
+
+    while True:
+        packet, addr = s.recvfrom(65565)
+        # Getting Ethernet Header
+        ethernet_header = packet[0:14]
+        
+        eth_header = struct.unpack("!6s6s2s", ethernet_header)
+
+        dest_mac = binascii.hexlify(eth_header[0]).decode('utf-8')
+        src_mac = binascii.hexlify(eth_header[1]).decode('utf-8')
+        eth_type = binascii.hexlify(eth_header[2]).decode('utf-8')
+
+        # Converting MAC address to the common format used by ARP table
+        src_mac_formatted = ':'.join(src_mac[i:i+2] for i in range(0, len(src_mac), 2)).lower()
+
+        # Get the IP address from the MAC address
+        src_ip = mac_to_ip.get(src_mac_formatted, 'N/A')
+
+        print(f"Destination MAC: {':'.join(dest_mac[i:i+2] for i in range(0, len(dest_mac), 2))} "
+              f"Source MAC: {':'.join(src_mac[i:i+2] for i in range(0, len(src_mac), 2))} "
+              f"Type: {eth_type} "
+              f"IP: {src_ip}")
+
+if __name__ == '__main__':
+    main()
